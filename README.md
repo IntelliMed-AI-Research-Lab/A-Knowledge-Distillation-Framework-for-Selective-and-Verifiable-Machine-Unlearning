@@ -1,321 +1,234 @@
 <div align="center">
 
-# 🧠 Forgetting-Aware Knowledge Distillation for Selective and Verifiable Machine Unlearning
+# A Reference-Based Audit of Retain-Only Distillation for Class-Level Machine Unlearning
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=flat-square&logo=python)](https://python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?style=flat-square&logo=pytorch)](https://pytorch.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Paper](https://img.shields.io/badge/Paper-Preprint-orange?style=flat-square)](.)
-[![Stars](https://img.shields.io/github/stars/irfanulkabirhira/A-Knowledge-Distillation-Framework-for-Selective-and-Verifiable-Machine-Unlearning?style=flat-square)](.)
 
-**Umme Sara · Md Irfanul Kabir Hira**
-
-*Machine Learning & Privacy Research*
-
----
-
-> **"Can a neural network be taught to forget — selectively, verifiably, and without retraining from scratch?"**
->
-> This repository answers that question with a rigorous empirical framework built on knowledge distillation.
+**Umme Sara · MST Moriom Akter Bithee · Md Irfanul Kabir Hira · Mohammad Shorif Uddin**
 
 </div>
 
 ---
 
-## 📖 Table of Contents
+This repository contains the code and results for an **audit** of retain-only knowledge distillation used as a class-level unlearning mechanism. It is **not** a new unlearning algorithm, and it does **not** show that distillation forgets. The question it asks is what an auditor can conclude about an updated model from black-box access to the original model, the updated model, and a model retrained on the retained classes.
 
-- [What is Machine Unlearning?](#-what-is-machine-unlearning)
-- [Why Our Approach?](#-why-our-approach-is-different--better)
-- [Framework Overview](#-framework-overview)
-- [Methodology](#-methodology)
-- [Datasets](#-datasets)
-- [Evaluation Metrics](#-evaluation-metrics)
-- [Key Results](#-key-results)
-- [Repository Structure](#-repository-structure)
-- [Installation & Usage](#-installation--usage)
-- [Reproducibility](#-reproducibility)
-- [Limitations & Future Work](#-limitations--future-work)
-- [Citation](#-citation)
+> **The results are empirical evidence, not a certificate of deletion.** All numbers come from one seed, one architecture (ResNet-18) and one draw of deleted classes.
 
----
+## Contents
 
-## 🔍 What is Machine Unlearning?
-
-When a deep learning model is trained on a dataset, it implicitly **memorizes** patterns from every training sample — including sensitive, private, or legally protected data. After deployment, regulations such as the **EU General Data Protection Regulation (GDPR)** grant individuals the **right to erasure**: the right to demand that their data — and its influence on any model — be completely removed.
-
-The naive solution is to **retrain the model from scratch** on the remaining data. This is:
-- ❌ **Computationally prohibitive** for large models
-- ❌ **Impractical** for frequent deletion requests
-- ❌ **Unverifiable** — how do you *prove* a model has forgotten?
-
-**Machine unlearning** is the field that asks: can we efficiently remove the influence of specific data from an already-trained model, and can we *verify* that the removal was successful?
+- [Why an audit](#why-an-audit)
+- [Method](#method)
+- [Models compared](#models-compared)
+- [Datasets](#datasets)
+- [Training recipes](#training-recipes)
+- [Audit metrics](#audit-metrics)
+- [Results](#results)
+- [What the results support, and what they do not](#what-the-results-support-and-what-they-do-not)
+- [Repository structure](#repository-structure)
+- [Installation and usage](#installation-and-usage)
+- [Reproducibility notes](#reproducibility-notes)
+- [Limitations and future work](#limitations-and-future-work)
+- [Citation](#citation)
 
 ---
 
-## 🏆 Why Our Approach Is Different & Better
+## Why an audit
 
-Most existing machine unlearning methods fall into one of two camps — and both have serious shortcomings:
+Class-level unlearning is often judged by how far the updated model moves away from the original model. Divergence from the original is necessary for forgetting but not sufficient. The goal is closeness to a model that never saw the deleted data, so this audit anchors every measurement to a **retrained reference** wherever one is available, and reports common indicators (logit distance, feature similarity, prediction entropy, transferred membership attacks) only as descriptions when no reference value exists.
 
-| Approach | How It Works | Problem |
-|---|---|---|
-| **Full Retraining** | Train from scratch on retained data | Prohibitively expensive; impractical at scale |
-| **Gradient Ascent** | Maximize loss on forgotten samples | Requires access to forget set during unlearning; can destabilize the model |
-| **SISA Training** | Partition data into shards; retrain affected shard | Requires special data partitioning *before* training; not applicable post-hoc |
-| **Our Approach** | Train student on retained data via KD | ✅ No access to forget set needed · ✅ No model destabilization · ✅ Multi-metric verifiable |
+## Method
 
-### What makes our framework stand out:
-
-**1. 🎯 Verification-First Design**
-
-We do not just claim that forgetting happened — we *prove* it using five independent metrics spanning output behavior, internal representations, prediction uncertainty, and privacy leakage. No single metric can be gamed or misinterpreted.
-
-**2. 🔒 No Forget-Set Required at Unlearning Time**
-
-Unlike gradient-ascent methods, our student model never sees forgotten class samples during training. This means the framework is applicable even when the original forget-set data is no longer accessible — a realistic real-world constraint.
-
-**3. 🧪 Empirically Grounded, Not Just Theoretically Claimed**
-
-We validate across **four diverse benchmark datasets** (Caltech-101, Caltech-256, CIFAR-100, Stanford Dogs) and **three forgetting scopes** (5, 10, 15 classes) — totalling 12 independent experimental conditions per metric. Our conclusions are backed by comprehensive cross-dataset evidence.
-
-**4. 🔐 Privacy-Aware by Design**
-
-We embed **Membership Inference Attack (MIA) transfer analysis** as a core evaluation step — not an afterthought. If an attacker trained on the teacher model cannot successfully attack the student model, the membership signal has been effectively erased.
-
-**5. ⚡ Efficient Relative to Full Retraining**
-
-The teacher is frozen after initial training. Only the lighter student network is optimized, and only on the retained subset `D_r ⊂ D`. This provides a proportional reduction in computational cost relative to full retraining.
-
-**6. 📐 Honest About Its Limits**
-
-Unlike many papers that overstate guarantees, we explicitly distinguish between *empirical behavioral forgetting* (what we demonstrate) and *certified deletion* (what we do not claim). This intellectual honesty makes the framework trustworthy for real deployment assessment.
-
----
-
-## 🗺️ Framework Overview
+**Retain-only distillation.** A teacher is trained on all classes. After a deletion request, a student is trained from random initialization on the retain set `D_r` only, using teacher logits and cross-entropy on the retained labels. No deleted image or label enters the student's loss, and no explicit forgetting term is applied.
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        PHASE 1: TEACHER TRAINING                    │
-│                                                                     │
-│   Full Dataset D ──► ResNet-18 Teacher f_θ ──► Frozen Reference    │
-│   (All classes)        (trained on D)           (never updated)    │
-└─────────────────────────────┬───────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    PHASE 2: FORGETTING SETUP                        │
-│                                                                     │
-│   D ──► Forget Set D_f (5/10/15 classes)                           │
-│     └── Retain Set D_r (remaining classes)                         │
-└─────────────────────────────┬───────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                   PHASE 3: STUDENT TRAINING                         │
-│                                                                     │
-│   D_r + Teacher Soft Labels ──► Student g_φ                        │
-│                                                                     │
-│   L_total = λ · L_KD + (1-λ) · L_CE                               │
-│                                                                     │
-│   • L_KD: Temperature-scaled KL divergence (T=4)                   │
-│   • L_CE: Supervised cross-entropy on retained classes             │
-│   • λ = 0.5 (balanced via grid search)                             │
-└─────────────────────────────┬───────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                  PHASE 4: MULTI-METRIC VERIFICATION                 │
-│                                                                     │
-│   Behavioral    │ Representational │ Uncertainty │ Privacy          │
-│   ─────────     │ ──────────────── │ ─────────── │ ───────          │
-│   Logit MSE     │ Cosine Sim.      │ Prediction  │ MIA Transfer     │
-│   Accuracy Gap  │ Feature Drift    │ Entropy     │ AUC / Accuracy   │
-└─────────────────────────────────────────────────────────────────────┘
+L_KD    = T^2 * KL( softmax(z_t / T) || softmax(z_s / T) )     # logits over all C classes
+L_total = lambda * L_KD + (1 - lambda) * L_CE                  # CE on retained labels only
 ```
 
----
+Fixed settings: `T = 4`, `lambda = 0.7`. Neither was searched.
 
-## 🔬 Methodology
+**A leakage channel.** The teacher's logits on retained images still carry probability mass on the deleted classes, so soft labels can pass deleted-class information to a student that never sees a deleted image. A masked variant (KD-M), which removes the deleted-class logits from the distillation target, is specified in the paper but **was not trained**. Only the unmasked variant (KD-U) is evaluated.
 
-### Core Formulation
+## Models compared
 
-Let `D` be the full training dataset and `C_f ⊂ C` the set of classes to be forgotten.
-
-**Retain set:** `D_r = D \ D_f`
-
-**Forget set:** `D_f = {(x,y) ∈ D | y ∈ C_f}`
-
-The **teacher** `f_θ` is trained on all of `D`. The **student** `g_φ` is trained only on `D_r` with no exposure to `D_f`.
-
-### Distillation Objective
-
-```
-L_KD = T² · KL( σ(z_t / T) ‖ σ(z_s / T) )
-```
-
-where `z_t`, `z_s` are teacher and student logits over retained classes, and `T=4` softens the teacher distribution to carry inter-class relational structure.
-
-### Final Loss
-
-```
-L_total = λ · L_KD + (1 - λ) · L_CE
-```
-
-This balances knowledge transfer from the teacher with direct supervised learning on retained labels.
-
-### Why Temperature Scaling Matters
-
-Setting `T=4` produces softer probability distributions from the teacher. This means the student learns not just *which* class is most likely, but *how similar* retained classes are to each other — a richer supervisory signal that improves generalization on the retained task while naturally diverging on forgotten classes.
-
----
-
-## 📊 Datasets
-
-| Dataset | Classes | Resolution | Granularity | Link |
+| Model | Role | Initialization | Trained on | Objective |
 |---|---|---|---|---|
-| **Caltech-101** | 101 | Variable | Coarse object categories | [Download](https://www.kaggle.com/datasets/imbikramsaha/caltech-101) |
-| **Caltech-256** | 257 | Variable | Broad object recognition | [Download](https://www.kaggle.com/datasets/jessicali9530/caltech256) |
-| **CIFAR-100** | 100 | 32×32 | Natural scene categories | [Download](https://www.kaggle.com/datasets/melikechan/cifar100) |
-| **Stanford Dogs** | 120 | Variable | Fine-grained dog breeds | [Download](https://www.kaggle.com/datasets/jessicali9530/stanford-dogs-dataset) |
+| Teacher `f_T` | Original model | ImageNet | All classes | CE |
+| Student `g_φ` | Updated model | Random | Retained classes | CE + KD |
+| Retrained, accuracy reference `f_R^acc` | Retained-class accuracy comparison | Random | Retained classes | CE |
+| Retrained, audit reference `f_R` | Deleted-class diagnostics (JS, entropy, probes, retained-class attacks) | ImageNet | Retained classes | CE |
 
-> ⚠️ Datasets are **not included** in this repository. Download from the links above and place in the corresponding dataset folder.
+The two references differ in initialization **and** recipe, and neither uses the student's recipe. Comparisons of the student with `f_R` therefore mix the effect of initialization with any effect of distillation. See [Limitations](#limitations-and-future-work).
 
-**Why these four datasets?** They span a spectrum from coarse-grained (Caltech-101, CIFAR-100) to fine-grained (Stanford Dogs), and from small (CIFAR-100 resolution) to large-scale (Caltech-256). This diversity tests whether our verification signals hold across visually distinct recognition settings — not just a single favorable benchmark.
+## Datasets
 
----
+Datasets are **not** included. Download them from the links below.
 
-## 📐 Evaluation Metrics
+| Dataset | Classes used | Train images per class | Link |
+|---|---|---|---|
+| Caltech-101 | 87 (balanced subset; includes the background class and related classes such as *Faces* and *Faces_easy*) | 32 | [Kaggle](https://www.kaggle.com/datasets/imbikramsaha/caltech-101) |
+| Caltech-256 | 257 (including clutter) | 60 | [Kaggle](https://www.kaggle.com/datasets/jessicali9530/caltech256) |
+| CIFAR-100 | 100 | 500 | [Kaggle](https://www.kaggle.com/datasets/melikechan/cifar100) |
+| Stanford Dogs | 120 | 70 | [Kaggle](https://www.kaggle.com/datasets/jessicali9530/stanford-dogs-dataset) |
 
-We evaluate unlearning quality across four dimensions. Every claim in this framework is backed by evidence from multiple independent signals.
+Because the Caltech subsets are class-balanced subsets, results are not directly comparable with studies on the standard splits.
 
-### 1. Behavioral Divergence — *Did the student forget?*
+**Deletion.** 5, 10 and 15 classes are deleted per dataset (12 configurations). Classes are drawn at random with seed 42, and the three scopes are nested prefixes of one draw. The test set is unchanged, so retained and deleted classes are evaluated on the same test set.
 
-**Logit MSE Distance**
-```
-D_logit = (1/N_f) · Σ ‖z_t(i) - z_s(i)‖²
-```
-Higher values → stronger behavioral divergence on forgotten samples.
+**Preprocessing.** Images are resized to 224×224.
+- Original notebooks: normalization with mean 0.5 and std 0.5; training augmentation of horizontal flip (p = 0.5), rotation up to 10°, brightness/contrast jitter 0.2, and translation up to 10%.
+- Audit notebooks: ImageNet mean/std and horizontal flip only.
 
-**Teacher–Student Accuracy Gap**
-```
-Δ_acc = Acc_teacher - Acc_student
-```
-A persistent gap confirms the student does not replicate the teacher's knowledge of forgotten classes.
+## Training recipes
 
-### 2. Representational Drift — *How deep does forgetting go?*
+All runs use ResNet-18, a fixed number of epochs, no learning-rate schedule, no weight decay (except the accuracy reference), no early stopping, and the final-epoch weights. Test accuracy is logged each epoch but is not used for model selection.
 
-**Feature Cosine Similarity**
-```
-CosSim(f_t, f_s) = (f_t · f_s) / (‖f_t‖ · ‖f_s‖)
-```
-Computed at the penultimate layer. Lower similarity = stronger representational drift on forgotten samples.
+| Parameter | Teacher | Student | Retrained (accuracy) | Retrained (audit) |
+|---|---|---|---|---|
+| Optimizer | Adam | Adam | AdamW | Adam |
+| Learning rate | 1e-4 | 3e-4 | 1e-3 | 1e-4 |
+| Epochs | 30 | 30 | 30 | 30 |
+| Batch size | 16 | 16 | 32 | 16 |
+| Weight decay | 0 | 0 | 1e-4 | 0 |
+| LR scheduler | None | None | None | None |
+| Initialization | ImageNet | Random | Random | ImageNet |
+| Objective | CE | CE + KD | CE | CE |
+| KD temperature / weight | n/a | 4 / 0.7 | n/a | n/a |
+| Base seed | 42 | 42 | 42 | 42 |
 
-### 3. Uncertainty Evidence — *Is the student confused about forgotten classes?*
+**[TODO before release: some earlier notebook versions for Caltech-256 and Stanford Dogs use 35 epochs. State here which count produced the reported numbers.]**
 
-**Prediction Entropy**
-```
-H(p) = -Σ p_c · log(p_c)
-```
-Higher entropy on forgotten samples indicates the student has lost discriminative knowledge about those classes.
+## Audit metrics
 
-### 4. Privacy Leakage — *Can an attacker still exploit the student?*
-
-**Membership Inference Attack (MIA) Transfer**
-
-An attack classifier trained on the teacher's outputs is transferred to the student. If AUC ≈ 0.50 (random guess), the membership signal has been erased. This is the strongest privacy-level verification available without formal certification.
-
----
-
-## 📈 Key Results
-
-### Logit MSE — Caltech-256
-
-| Forget Config | Mean MSE | Std |
+| Question | Measurement | Reference |
 |---|---|---|
-| Forget 5 Classes | 74.59 | 39.22 |
-| Forget 10 Classes | 89.51 | 53.82 |
-| Forget 15 Classes | 89.87 | 47.59 |
+| Utility | Retained-class accuracy `A_r`; deleted-class accuracy `A_f`; overall accuracy is reported but is dominated by how many deleted classes are in the test set | Random-init retrained model (`f_R^acc`) |
+| Output behavior on deleted classes | Jensen–Shannon divergence between student and retrained outputs, restricted to retained classes and renormalized (upper bound ln 2 = 0.693 nats) | Audit reference `f_R` |
+| Uncertainty | Prediction entropy on deleted-class samples | Audit reference `f_R` |
+| Residual information | Linear probe on frozen penultimate features (ridge classifier), trained on deleted-class training samples and tested on deleted-class test samples | Teacher and audit reference `f_R` |
+| Membership exposure, deleted classes | Logistic-regression attack on 5 output features (max probability, entropy, top-3 probabilities): teacher-own, transfer (teacher-fitted, applied to the student), student-own | None available |
+| Membership exposure, retained classes | Own-output attacks on 7 label-aware features, balanced members and non-members (base rate 0.5) | Audit reference `f_R` |
+| Descriptive only | Teacher–student logit distance and penultimate-feature cosine similarity | **No reference value** |
 
-↑ MSE increases and stabilizes — consistent suppression of forgotten knowledge.
+No composite score is computed. AUC intervals are approximate (Hanley–McNeil), assume independent samples, and exclude variation across seeds and class draws.
 
-### MIA Transfer Results (AUC)
+## Results
 
-| Dataset | Forget Config | Teacher AUC | Student AUC |
-|---|---|---|---|
-| Caltech-256 | 5 classes | 0.8154 | 0.5586 |
-| Caltech-256 | 15 classes | 0.8099 | **0.4890** |
-| Stanford Dogs | 15 classes | 0.8692 | **0.4942** |
-| CIFAR-100 | 15 classes | 0.6932 | **0.4949** |
-| Caltech-101 | 15 classes | 0.8611 | **0.4986** |
+All results are from a single run per configuration.
 
-✅ Student AUC consistently drops toward 0.50 (random) — the membership signal is erased.
+### Accuracy (%)
 
-### Teacher vs Student Accuracy
+Teacher accuracy is over all classes. Student and retrained accuracy are on retained-class test samples. Gap is retrained minus student, so positive means the retrained model is more accurate.
 
-| Dataset | Teacher Acc | Student Acc (15 classes) | Gap |
-|---|---|---|---|
-| Caltech-101 | 93.53% | 50.72% | 42.81% |
-| Caltech-256 | 71.24% | 44.81% | 26.43% |
-| CIFAR-100 | 77.87% | 61.82% | 16.05% |
-| Stanford Dogs | 61.06% | 26.42% | 34.64% |
+| Dataset | Deleted | Teacher (overall) | Student (retained) | Retrained, random init (retained) | Gap (pp) | Student (deleted) |
+|---|---|---|---|---|---|---|
+| Caltech-101 | 5 | 93.53 | 59.30 | 63.09 | +3.79 | 0.00 |
+| | 10 | 93.53 | 63.96 | 58.49 | −5.47 | 0.00 |
+| | 15 | 93.53 | 61.28 | 60.32 | −0.96 | 0.00 |
+| Caltech-256 | 5 | 73.13 | 44.59 | 46.03 | +1.44 | 0.00 |
+| | 10 | 72.07 | 46.61 | 45.21 | −1.40 | 0.00 |
+| | 15 | 71.24 | 47.03 | 45.37 | −1.66 | 0.00 |
+| Stanford Dogs | 5 | 61.67 | 28.35 | 32.14 | +3.79 | 1.33 |
+| | 10 | 60.28 | 31.52 | 34.97 | +3.45 | 0.00 |
+| | 15 | 61.06 | 30.19 | 33.59 | +3.40 | 0.00 |
+| CIFAR-100 | 5 | 77.55 | 71.85 | 62.99 | −8.86 | 2.60 |
+| | 10 | 77.87 | 71.40 | 62.60 | −8.80 | 1.10 |
+| | 15 | 77.87 | 72.08 | 64.28 | −7.80 | 3.67 |
 
-The growing gap confirms selective forgetting — the student preserves the retained task while losing full knowledge.
+- Student accuracy on deleted classes is 0.00–3.67%. This is the expected consequence of training without those labels and is not evidence of forgetting by itself.
+- The decline of overall student accuracy with the deletion scope is largely an accounting effect of deleted classes in the test set. On CIFAR-100 retained-class accuracy is flat (71.4–72.1%) while overall accuracy falls from 68.4% to 61.8%.
+- Test-set sampling error alone gives an approximate 95% half-width of about 5 points for a difference between two models on Caltech-101, 2 points on Caltech-256 and Stanford Dogs, and 1.5 points on CIFAR-100.
+- The student and the accuracy reference use different recipes, so these differences mix recipe and distillation effects.
 
----
+### Behavior on deleted-class samples
 
-## 📁 Repository Structure
+JS is between student and the ImageNet-initialized audit reference. Probe is accuracy (%) of a linear probe for the teacher (T), audit reference (R) and student (S). Chance is 20%, 10% and 6.7% for 5, 10 and 15 classes.
+
+| Dataset | Deleted | JS (nats) | Probe T | Probe R | Probe S |
+|---|---|---|---|---|---|
+| Caltech-101 | 5 | 0.4276 | 100.00 | 98.94 | 95.74 |
+| | 10 | 0.4859 | 98.72 | 92.31 | 87.82 |
+| | 15 | 0.4111 | 99.45 | 97.25 | 92.58 |
+| Caltech-256 | 5 | 0.5356 | 85.16 | 75.00 | 60.16 |
+| | 10 | 0.4831 | 90.75 | 82.38 | 73.13 |
+| | 15 | 0.5049 | 89.57 | 83.44 | 69.94 |
+| Stanford Dogs | 5 | 0.5025 | 87.66 | 87.01 | 64.94 |
+| | 10 | 0.4813 | 92.48 | 90.91 | 73.98 |
+| | 15 | 0.4545 | 90.45 | 86.59 | 73.98 |
+| CIFAR-100 | 5 | 0.3490 | 98.40 | 97.80 | 96.40 |
+| | 10 | 0.3466 | 93.30 | 88.10 | 87.60 |
+| | 15 | 0.3565 | 89.80 | 82.73 | 80.07 |
+
+- **JS divergence is 0.35–0.54 nats, 50–77% of its upper bound.** The student's outputs are far from the reference's in absolute terms. This cannot be interpreted further because the teacher–retrained divergence and a noise floor from two independently trained retrained models were not computed.
+- **The retrained model is as confident as the student** on deleted-class samples (mean entropy 0.65–1.27 nats against uniform references of 4.3–5.5 nats), so low entropy is expected of a model that never saw the class and is not evidence of forgetting.
+- **Deleted-class information is linearly decodable from every model**, including the retrained one. The ordering teacher ≥ retrained ≥ student holds in all 12 configurations, so the student retains no more linearly decodable information than the reference. The audit reference starts from ImageNet weights and the student does not, so this ordering is expected regardless of forgetting, and the probe separates the teacher from the retrained model only weakly.
+
+### Membership inference
+
+**Deleted-class samples (AUC).** Members are deleted-class training samples seen by the teacher; non-members are held-out samples of the same classes. The 10-class Caltech-101 run was not executed.
+
+| Dataset | Deleted | Teacher-own | Transfer to student | Student-own |
+|---|---|---|---|---|
+| Caltech-101 | 5 | 0.742 | 0.571 | 0.594 |
+| | 15 | 0.861 | 0.499 | 0.537 |
+| Caltech-256 | 5 | 0.815 | 0.559 | 0.457 |
+| | 10 | 0.820 | 0.512 | 0.584 |
+| | 15 | 0.810 | 0.489 | 0.461 |
+| Stanford Dogs | 5 | 0.845 | 0.534 | 0.527 |
+| | 10 | 0.803 | 0.513 | 0.500 |
+| | 15 | 0.869 | 0.494 | 0.443 |
+| CIFAR-100 | 5 | 0.680 | 0.490 | 0.502 |
+| | 10 | 0.698 | 0.499 | 0.476 |
+| | 15 | 0.693 | 0.495 | 0.468 |
+
+- The attack finds membership signal in the teacher (AUC 0.68–0.87).
+- **Transfer to the student fails (AUC 0.49–0.57), but this reflects a calibration difference, not privacy.** Transfer accuracy (0.23–0.51) is below the base rate in every case because the student is less confident than the teacher.
+- Attacks fitted to the student itself give AUC 0.44–0.59, and no interval lies entirely above 0.5. The intervals are wide, and chance-level AUC is expected for samples that neither the student nor a retrained model trained on, so this result cannot separate a small residual signal from none. The retrained model's deleted-class attack AUC was not measured.
+
+**Retained-class samples.** The student exposes more membership signal than the ImageNet-initialized retrained model in **11 of 12** configurations: by 0.08–0.15 AUC on Caltech-101 and Caltech-256, and by 0.04 or less on Stanford Dogs and CIFAR-100. No intervals were computed. This may reflect distillation or the difference in initialization, and the two were not separated. It measures exposure of retained data, not forgetting of deleted data.
+
+## What the results support, and what they do not
+
+**Supported by this audit:**
+1. Student accuracy on deleted classes is 0–3.7%.
+2. Overall accuracy, logit distance, feature cosine similarity, prediction entropy and transferred-attack AUC are insufficient as evidence of forgetting when no reference is available.
+3. The student's retained-class accuracy is comparable to a randomly initialized retrained model on the two Caltech datasets, 3.4–3.8 points lower on Stanford Dogs and 7.8–8.9 points higher on CIFAR-100. The recipes differ.
+4. The student retains no more linearly decodable deleted-class information than the audit reference (low-power probe, confounded by initialization).
+5. The student exposes more membership signal on retained samples than the audit reference in 11 of 12 configurations.
+
+**Not shown:**
+- That the student's outputs on deleted-class samples are close to those of a model that never saw them.
+- Whether the teacher's soft labels transferred deleted-class information. This requires the masked-distillation student, which was not trained.
+- How retain-only distillation compares with fine-tuning, gradient ascent, SCRUB, SalUn or DELETE. None were run.
+- Anything about seed-to-seed variability.
+
+## Repository structure
 
 ```
 .
-├── Caltech101/
-│   ├── teacher_training.py          # Teacher model training on full dataset
-│   ├── student_training.py          # Student KD training on retained data
-│   ├── evaluate_forgetting.py       # Multi-metric forgetting verification
-│   └── results/                     # Saved metrics, plots, logs
-│
-├── Caltech256/
-│   ├── teacher_training.py
-│   ├── student_training.py
-│   ├── evaluate_forgetting.py
-│   └── results/
-│
-├── CIFAR100/
-│   ├── teacher_training.py
-│   ├── student_training.py
-│   ├── evaluate_forgetting.py
-│   └── results/
-│
-├── StanfordDogs/
-│   ├── teacher_training.py
-│   ├── student_training.py
-│   ├── evaluate_forgetting.py
-│   └── results/
-│
 ├── notebooks/
-│   ├── 01_teacher_training.ipynb
-│   ├── 02_student_distillation.ipynb
-│   ├── 03_forgetting_verification.ipynb
-│   └── 04_mia_evaluation.ipynb
-│
-├── utils/
-│   ├── metrics.py                   # Logit MSE, cosine similarity, entropy
-│   ├── mia.py                       # Membership inference attack
-│   ├── dataset_utils.py             # Retain/forget set construction
-│   └── visualization.py            # Histogram and accuracy plots
-│
-├── configs/
-│   └── hyperparams.yaml             # All experiment hyperparameters
-│
-├── results/                         # Cross-dataset summary results
+│   ├── caltech_balanced_dataset1.ipynb         # Caltech-101 (87-class subset): teacher, student, deleted-class
+│   │                                           #   evaluation, teacher-own / transfer / student-own attacks
+│   ├── Caltech_256_balanced_dataset.ipynb      # same pipeline, Caltech-256
+│   ├── Standford_dog_balanced_dataset.ipynb    # same pipeline, Stanford Dogs
+│   ├── cifar100.ipynb                          # same pipeline, CIFAR-100
+│   ├── part_1_for_Caltech_101_...resum.ipynb   # audit: ImageNet-init retrained reference, JS, entropy,
+│   │                                           #   linear probes, retained-class attacks
+│   └── part_2_stanford-dogs-forget-10-forget-15.ipynb   # audit for Stanford Dogs, 10 and 15 deleted classes
 ├── requirements.txt
 └── README.md
 ```
 
----
+**[TODO before release:]**
+- Keep **one** version of each notebook. The repository currently holds several copies that differ in epoch counts.
+- Add the script that trains the randomly initialized accuracy reference (AdamW, lr 1e-3, batch size 32). It is required to reproduce the retained-class accuracy comparison above.
+- Replace hard-coded local paths (`E:\...`) in the original notebooks with a configurable path.
+- Update the tree above to match the final file names.
 
-## ⚙️ Installation & Usage
-
-### Requirements
+## Installation and usage
 
 ```bash
 git clone https://github.com/irfanulkabirhira/A-Knowledge-Distillation-Framework-for-Selective-and-Verifiable-Machine-Unlearning.git
@@ -323,146 +236,72 @@ cd A-Knowledge-Distillation-Framework-for-Selective-and-Verifiable-Machine-Unlea
 pip install -r requirements.txt
 ```
 
-**requirements.txt**
+`requirements.txt` (pin the exact versions you used):
+
 ```
 torch>=2.0.0
 torchvision>=0.15.0
-numpy>=1.24.0
-scikit-learn>=1.2.0
-matplotlib>=3.7.0
-tqdm>=4.65.0
-pyyaml>=6.0
+numpy
+pandas
+scikit-learn
+matplotlib
+tqdm
+opencv-python
+timm
 ```
 
-### Step 1: Train the Teacher
+The experiments run as notebooks on a single GPU (Kaggle was used for the audit notebooks).
 
-```python
-# Train ResNet-18 on full dataset (e.g., Caltech-101)
-python Caltech101/teacher_training.py \
-    --dataset caltech101 \
-    --epochs 50 \
-    --lr 0.01 \
-    --batch_size 64
-```
+1. **Per dataset, run the original notebook.** It trains the ResNet-18 teacher on all classes, draws the deleted classes with seed 42, trains the retain-only distillation student, and computes accuracy, teacher–student distances, entropy, and the deleted-class membership attacks. Set the dataset path at the top of the notebook.
+2. **Run the audit notebooks (`part_1`, `part_2`).** They train or load the ImageNet-initialized reference and compute JS divergence, entropy, linear probes and retained-class attacks for the 12 configurations. If you supply your own checkpoints, the notebook requires provenance metadata and rejects unverified weights unless you explicitly opt in. Without checkpoints, the models are retrained from scratch.
+3. **Train the random-init accuracy reference** with the script listed under *Repository structure*.
 
-### Step 2: Define the Forget Set & Train the Student
+## Reproducibility notes
 
-```python
-# Train student via knowledge distillation on retained classes only
-python Caltech101/student_training.py \
-    --forget_classes 5 \       # Number of classes to forget (5, 10, or 15)
-    --temperature 4 \          # KD temperature
-    --lambda_kd 0.5 \          # Balance between KD and CE loss
-    --epochs 50 \
-    --lr 0.01
-```
+- All runs use base seed 42. The audit notebooks add fixed per-run offsets to the seed.
+- Deleted classes are the first 5, first 10 and all 15 of one seed-42 draw per dataset, so scopes are nested.
+- The audit notebooks reconstruct models unless checkpoints are supplied, so their numbers pertain to the models they train.
+- The original and audit notebooks use different preprocessing (see [Datasets](#datasets)).
+- Teacher accuracy is identical across deletion scopes on Caltech-101 and (for 10 and 15 classes) CIFAR-100, but varies on Caltech-256 and Stanford Dogs. **[TODO: state whether the teacher is trained once per dataset or once per run.]**
+- Results come from a single run per configuration. Differences of 1–3 points between scopes are not interpreted.
 
-### Step 3: Run Forgetting Verification
+## Limitations and future work
 
-```python
-# Compute all five verification metrics
-python Caltech101/evaluate_forgetting.py \
-    --teacher_checkpoint checkpoints/teacher.pth \
-    --student_checkpoint checkpoints/student.pth \
-    --forget_classes 5
-```
+**Limitations**
+- **Missing reference quantities.** The audit criterion compares the student's distance to the retrained model with the teacher's distance to it. Only the first was computed. The teacher–retrained divergence and a noise floor from two retrained models are missing, so the JS values cannot be interpreted.
+- **Initialization and recipe confounds.** The teacher and the audit reference start from ImageNet weights, the student and the accuracy reference start from random weights, and the two references use different recipes. No experiment separates initialization or recipe from distillation.
+- **Untested leakage channel.** The masked-distillation variant was specified but not trained.
+- **Single run.** One seed, one architecture, one nested class draw.
+- **Metric limits.** The linear probe has low power and no control on retained classes. Membership attacks are logistic regressions on five (deleted-class, label-free) or seven (retained-class, label-aware) output features, with approximate intervals. Threshold, shadow-model and low-false-positive-rate attacks were not run.
+- **No baselines.** No other unlearning method was evaluated.
+- **No efficiency claim.** The student trains from random initialization on the whole retain set and needs teacher forward passes, so its cost is at least that of retraining. Wall-clock time was not measured.
+- **Scope.** Class-level deletion, ResNet-18 and image classification only.
 
-This outputs:
-- Logit MSE distance (mean, std, min, max)
-- Feature cosine similarity
-- Prediction entropy distribution
-- Teacher vs student accuracy comparison
-- MIA transfer accuracy and AUC
+**Future work, in order of how much it would strengthen the conclusions**
+1. Compute the teacher–retrained JS divergence and a retrained-seed noise floor (inference only).
+2. Add probe and cosine-similarity controls on retained classes, and threshold and low-FPR attacks.
+3. Train the masked-distillation variant (KD-M) and compare it with KD-U.
+4. Repeat each configuration with several seeds and independent class draws, with paired tests across seeds.
+5. Run fine-tuning, gradient ascent, SCRUB, SalUn and DELETE under the same protocol.
+6. Match initialization and recipe between the student and the references.
+7. Test a second architecture, instance-level deletion, and non-image tasks.
 
-### Hyperparameter Reference
-
-| Parameter | Value | Rationale |
-|---|---|---|
-| Optimizer | SGD with Momentum | Better-calibrated confidence values for MIA evaluation |
-| Learning Rate | 0.01 | Standard for ResNet fine-tuning |
-| LR Schedule | Cosine Annealing | Fast early convergence, stable final epochs |
-| Batch Size | 64 | Efficient gradient estimation |
-| Momentum | 0.9 | Stability in optimization |
-| Weight Decay | 5×10⁻⁴ | Prevents overfitting to retained classes |
-| KD Temperature (T) | 4 | Softens teacher distribution; preserves inter-class structure |
-| λ (KD/CE balance) | 0.5 | Selected via grid search over {0.3, 0.5, 0.7} |
-| Epochs | 50 | With early stopping (patience=10) |
-| Validation Split | 10–15% | Per-class stratified split |
-
----
-
-## 🔁 Reproducibility
-
-All results in the paper can be reproduced with the following guarantees:
-
-- ✅ **Same hyperparameters** used across all datasets (see `configs/hyperparams.yaml`)
-- ✅ **Class-balanced splits** — equal samples per class to eliminate selection bias
-- ✅ **Fixed preprocessing pipeline** — all images resized to 224×224, normalized with ImageNet mean/std
-- ✅ **Identical teacher architecture** — ResNet-18 with ImageNet pre-trained weights across all datasets
-- ✅ **Three forgetting scopes tested** — 5, 10, 15 forgotten classes per dataset
-- ✅ **Complete code** — from data loading to metric computation and visualization
-
----
-
-## ⚠️ Honest Limitations
-
-We believe transparency about limitations is what makes a research framework trustworthy.
-
-| Limitation | Details |
-|---|---|
-| **No formal deletion guarantees** | Results are empirical behavioral evidence, not certified removal proofs |
-| **Class-level only** | Instance-level or subject-level unlearning is not addressed |
-| **Image classification scope** | Generalization to language models or multimodal models is not validated |
-| **No wall-clock efficiency measurement** | Timing comparisons against retraining are not formally benchmarked |
-| **Architecture-specific** | Results are based on CNN (ResNet-18); transformer architectures may behave differently |
-
----
-
-## 🔭 Limitations & Future Work
-
-- **Instance-level unlearning** — extend to sample-level or attribute-level deletion
-- **Certified removal bounds** — integrate differential privacy or influence function analysis
-- **Transformer architectures** — validate framework on ViT, DINO, CLIP-based models
-- **Explicit forgetting signals** — augment with entropy maximization or adversarial forgetting loss to strengthen separation
-- **Medical imaging applications** — apply to high-stakes domains requiring regulatory compliance
-- **Advanced representation analysis** — incorporate CKA, influence functions, and latent drift metrics
-
----
-
-## 📚 Citation
-
-If you find this work useful for your research, please cite:
+## Citation
 
 ```bibtex
-@article{sara2025forgetting,
-  title     = {Forgetting-Aware Knowledge Distillation for Selective and Verifiable Machine Unlearning},
-  author    = {Sara, Umme},
-  journal   = {Preprint},
-  year      = {2025},
-  note      = {Available at: https://github.com/irfanulkabirhira/A-Knowledge-Distillation-Framework-for-Selective-and-Verifiable-Machine-Unlearning}
+@article{sara2026reference,
+  title   = {A Reference-Based Audit of Retain-Only Distillation for Class-Level Machine Unlearning},
+  author  = {Sara, Umme and Bithee, MST Moriom Akter and Hira, Md Irfanul Kabir and Uddin, Mohammad Shorif},
+  journal = {Preprint},
+  year    = {2026},
+  note    = {Code: https://github.com/irfanulkabirhira/A-Knowledge-Distillation-Framework-for-Selective-and-Verifiable-Machine-Unlearning}
 }
 ```
 
----
+## License
 
-## 📜 License
+MIT. See [LICENSE](LICENSE). The datasets are public benchmarks; refer to their own licenses before reuse.
 
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+## Acknowledgements
 
-The datasets used are publicly available benchmarks. Please refer to their respective licenses before using them in your own work.
-
----
-
-## 🙏 Acknowledgements
-
-This work uses no external funding. Language editing assistance was provided by AI tools (ChatGPT, Gemini). All experimental design, implementation, and analysis were conducted independently by the authors.
-
----
-
-<div align="center">
-
-**If this repository helped your research, please ⭐ star it and share it with others working on machine unlearning, privacy-preserving ML, or knowledge distillation.**
-
-*Questions? Open an [Issue](../../issues) or reach out directly.*
-
-</div>
+This work received no external funding. AI language-editing tools (ChatGPT, Gemini) were used for language correction of the manuscript.
